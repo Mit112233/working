@@ -147,7 +147,32 @@ public class AttendanceServlet extends HttpServlet {
     }
 
     private void handleEmployeeView(HttpServletRequest req, HttpServletResponse resp, User user) throws ServletException, IOException {
-        req.setAttribute("attendanceRecords", attendanceDAO.findByUserId(user.getUsername()));
+        List<Attendance> records = attendanceDAO.findByUserId(user.getUsername());
+        req.setAttribute("attendanceRecords", records);
+
+        // ---------------- アラート機能追加 ----------------
+        Map<String, String> alerts = records.stream().flatMap(att -> {
+            java.util.List<java.util.AbstractMap.SimpleEntry<String,String>> temp = new java.util.ArrayList<>();
+
+            if (att.getCheckInTime() != null && 
+                (att.getCheckInTime().getHour() > 9 || (att.getCheckInTime().getHour() == 9 && att.getCheckInTime().getMinute() > 15))) {
+                temp.add(new java.util.AbstractMap.SimpleEntry<>(att.getCheckInTime().toString(), "遅刻"));
+            }
+            if (att.getCheckOutTime() != null && att.getCheckOutTime().getHour() < 17) {
+                temp.add(new java.util.AbstractMap.SimpleEntry<>(att.getCheckOutTime().toString(), "早退"));
+            }
+            if (att.getCheckInTime() != null && att.getCheckOutTime() != null) {
+                long hours = java.time.temporal.ChronoUnit.HOURS.between(att.getCheckInTime(), att.getCheckOutTime());
+                if (hours > 8) {
+                    temp.add(new java.util.AbstractMap.SimpleEntry<>(att.getCheckOutTime().toString(), "残業"));
+                }
+            }
+            return temp.stream();
+        }).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+        req.setAttribute("attendanceAlerts", alerts);
+        // -------------------------------------------------
+
         RequestDispatcher rd = req.getRequestDispatcher("/jsp/employee_menu.jsp");
         rd.forward(req, resp);
     }

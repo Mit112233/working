@@ -6,7 +6,7 @@
 <head>
 <meta charset="UTF-8">
 <title>ユーザー管理</title>
-<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="${pageContext.request.contextPath}/style.css">
 </head>
 <body>
 	<div class="container">
