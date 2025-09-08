@@ -4,11 +4,10 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
@@ -36,7 +35,7 @@ public class AttendanceServlet extends HttpServlet {
 
         User user = (User) session.getAttribute("user");
 
-        // セッションにsuccessMessageがあればリクエストスコープにセット
+        // 成功メッセージをリクエストスコープにセット
         String message = (String) session.getAttribute("successMessage");
         if (message != null) {
             req.setAttribute("successMessage", message);
@@ -49,6 +48,21 @@ public class AttendanceServlet extends HttpServlet {
             exportCsv(req, resp);
         } else if ("filter".equals(action) && "admin".equals(user.getRole())) {
             handleAdminFilter(req, resp);
+        } else if ("daily_report".equals(action) && "admin".equals(user.getRole())) {
+            Map<LocalDate, Long> dailyHours = attendanceDAO.getDailyWorkingHours(null);
+            req.setAttribute("dailyHours", dailyHours);
+            RequestDispatcher rd = req.getRequestDispatcher("/jsp/daily_report.jsp");
+            rd.forward(req, resp);
+        } else if ("weekly_report".equals(action) && "admin".equals(user.getRole())) {
+            Map<String, Long> weeklyHours = attendanceDAO.getWeeklyWorkingHours(null);
+            req.setAttribute("weeklyHours", weeklyHours);
+            RequestDispatcher rd = req.getRequestDispatcher("/jsp/weekly_report.jsp");
+            rd.forward(req, resp);
+        } else if ("monthly_report".equals(action) && "admin".equals(user.getRole())) {
+            Map<YearMonth, Long> monthlyHours = attendanceDAO.getMonthlyWorkingHours(null);
+            req.setAttribute("monthlyHours", monthlyHours);
+            RequestDispatcher rd = req.getRequestDispatcher("/jsp/monthly_report.jsp");
+            rd.forward(req, resp);
         } else {
             if ("admin".equals(user.getRole())) {
                 handleAdminView(req, resp);
@@ -87,7 +101,6 @@ public class AttendanceServlet extends HttpServlet {
             session.setAttribute("errorMessage", "日付/時刻の形式が不正です。");
         }
 
-        // リダイレクト
         if ("admin".equals(user.getRole())) {
             String filterUserId = req.getParameter("filterUserId") != null ? req.getParameter("filterUserId") : "";
             String startDate = req.getParameter("startDate") != null ? req.getParameter("startDate") : "";
@@ -99,8 +112,6 @@ public class AttendanceServlet extends HttpServlet {
         }
     }
 
-    // --------------------- ヘルパーメソッド ---------------------
-
     private void handleAdminFilter(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         String filterUserId = req.getParameter("filterUserId");
         LocalDate startDate = parseLocalDate(req.getParameter("startDate"));
@@ -109,18 +120,10 @@ public class AttendanceServlet extends HttpServlet {
         List<Attendance> filteredRecords = attendanceDAO.findFilteredRecords(filterUserId, startDate, endDate);
         req.setAttribute("allAttendanceRecords", filteredRecords);
 
-        Map<String, Long> totalHoursByUser = filteredRecords.stream()
-                .collect(Collectors.groupingBy(Attendance::getUserId,
-                        Collectors.summingLong(att -> {
-                            if (att.getCheckInTime() != null && att.getCheckOutTime() != null) {
-                                return java.time.temporal.ChronoUnit.HOURS.between(att.getCheckInTime(), att.getCheckOutTime());
-                            }
-                            return 0L;
-                        })));
-
-        req.setAttribute("totalHoursByUser", totalHoursByUser);
-        req.setAttribute("monthlyWorkingHours", attendanceDAO.getMonthlyWorkingHours(filterUserId));
-        req.setAttribute("monthlyCheckInCounts", attendanceDAO.getMonthlyCheckInCounts(filterUserId));
+        // 集計結果をセット
+        req.setAttribute("dailyHours", attendanceDAO.getDailyWorkingHours(filterUserId));
+        req.setAttribute("weeklyHours", attendanceDAO.getWeeklyWorkingHours(filterUserId));
+        req.setAttribute("monthlyHours", attendanceDAO.getMonthlyWorkingHours(filterUserId));
 
         RequestDispatcher rd = req.getRequestDispatcher("/jsp/admin_menu.jsp");
         rd.forward(req, resp);
@@ -130,17 +133,10 @@ public class AttendanceServlet extends HttpServlet {
         List<Attendance> allRecords = attendanceDAO.findAll();
         req.setAttribute("allAttendanceRecords", allRecords);
 
-        Map<String, Long> totalHoursByUser = allRecords.stream()
-                .collect(Collectors.groupingBy(Attendance::getUserId,
-                        Collectors.summingLong(att -> {
-                            if (att.getCheckInTime() != null && att.getCheckOutTime() != null) {
-                                return java.time.temporal.ChronoUnit.HOURS.between(att.getCheckInTime(), att.getCheckOutTime());
-                            }
-                            return 0L;
-                        })));
-        req.setAttribute("totalHoursByUser", totalHoursByUser);
-        req.setAttribute("monthlyWorkingHours", attendanceDAO.getMonthlyWorkingHours(null));
-        req.setAttribute("monthlyCheckInCounts", attendanceDAO.getMonthlyCheckInCounts(null));
+        // 集計結果をセット
+        req.setAttribute("dailyHours", attendanceDAO.getDailyWorkingHours(null));
+        req.setAttribute("weeklyHours", attendanceDAO.getWeeklyWorkingHours(null));
+        req.setAttribute("monthlyHours", attendanceDAO.getMonthlyWorkingHours(null));
 
         RequestDispatcher rd = req.getRequestDispatcher("/jsp/admin_menu.jsp");
         rd.forward(req, resp);
@@ -150,28 +146,9 @@ public class AttendanceServlet extends HttpServlet {
         List<Attendance> records = attendanceDAO.findByUserId(user.getUsername());
         req.setAttribute("attendanceRecords", records);
 
-        // ---------------- アラート機能追加 ----------------
-        Map<String, String> alerts = records.stream().flatMap(att -> {
-            java.util.List<java.util.AbstractMap.SimpleEntry<String,String>> temp = new java.util.ArrayList<>();
-
-            if (att.getCheckInTime() != null && 
-                (att.getCheckInTime().getHour() > 9 || (att.getCheckInTime().getHour() == 9 && att.getCheckInTime().getMinute() > 15))) {
-                temp.add(new java.util.AbstractMap.SimpleEntry<>(att.getCheckInTime().toString(), "遅刻"));
-            }
-            if (att.getCheckOutTime() != null && att.getCheckOutTime().getHour() < 17) {
-                temp.add(new java.util.AbstractMap.SimpleEntry<>(att.getCheckOutTime().toString(), "早退"));
-            }
-            if (att.getCheckInTime() != null && att.getCheckOutTime() != null) {
-                long hours = java.time.temporal.ChronoUnit.HOURS.between(att.getCheckInTime(), att.getCheckOutTime());
-                if (hours > 8) {
-                    temp.add(new java.util.AbstractMap.SimpleEntry<>(att.getCheckOutTime().toString(), "残業"));
-                }
-            }
-            return temp.stream();
-        }).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-
-        req.setAttribute("attendanceAlerts", alerts);
-        // -------------------------------------------------
+        req.setAttribute("dailyHours", attendanceDAO.getDailyWorkingHours(user.getUsername()));
+        req.setAttribute("weeklyHours", attendanceDAO.getWeeklyWorkingHours(user.getUsername()));
+        req.setAttribute("monthlyHours", attendanceDAO.getMonthlyWorkingHours(user.getUsername()));
 
         RequestDispatcher rd = req.getRequestDispatcher("/jsp/employee_menu.jsp");
         rd.forward(req, resp);
@@ -242,7 +219,7 @@ public class AttendanceServlet extends HttpServlet {
         LocalDate endDate = parseLocalDate(req.getParameter("endDate"));
 
         List<Attendance> records = attendanceDAO.findFilteredRecords(filterUserId, startDate, endDate);
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
         for (Attendance record : records) {
             writer.append(String.format("%s,%s,%s\n",
